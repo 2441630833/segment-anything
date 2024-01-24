@@ -219,7 +219,7 @@ class SamPredictor:
             points = None
 
         # Embed prompts
-        sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
+        sparse_embeddings, dense_embeddings, point_locations = self.model.prompt_encoder(
             points=points,
             boxes=boxes,
             masks=mask_input,
@@ -231,6 +231,7 @@ class SamPredictor:
             image_pe=self.model.prompt_encoder.get_dense_pe(),
             sparse_prompt_embeddings=sparse_embeddings,
             dense_prompt_embeddings=dense_embeddings,
+            point_locations = point_locations,
             multimask_output=multimask_output,
         )
 

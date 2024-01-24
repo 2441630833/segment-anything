@@ -67,6 +67,30 @@ class MaskDecoder(nn.Module):
         self.iou_prediction_head = MLP(
             transformer_dim, iou_head_hidden_dim, self.num_mask_tokens, iou_head_depth
         )
+     # New function to edit embeddings around a given point
+    # def edit_image_embeddings(self, image_embeddings: torch.Tensor, point_locations: Tuple[int, int]) -> torch.Tensor:
+    #     """
+    #     Edit the embeddings of the image around the given point.
+        
+    #     Arguments:
+    #         image_embeddings (torch.Tensor): the embeddings from the image encoder
+    #         prompt_point (Tuple[int, int]): the point location on the image to be edited
+            
+    #     Returns:
+    #         torch.Tensor: the edited image embeddings
+    #     """
+    #     x, y = point_locations
+
+    #     # Get the pixel value at the specified point
+    #     point_pixel_value = image_embeddings[:,:,x,y]
+
+    #     # Change the pixel values in a 20*20 square centered at the selected point to this value
+    #     lower_bound_x, upper_bound_x = max(0,x-10), min(image_embeddings.shape[2],x+10)
+    #     lower_bound_y, upper_bound_y = max(0,y-10), min(image_embeddings.shape[3],y+10)
+
+    #     image_embeddings[:,:,lower_bound_x:upper_bound_x,lower_bound_y:upper_bound_y] = point_pixel_value
+        
+    #     return image_embeddings
 
     def forward(
         self,
@@ -74,6 +98,7 @@ class MaskDecoder(nn.Module):
         image_pe: torch.Tensor,
         sparse_prompt_embeddings: torch.Tensor,
         dense_prompt_embeddings: torch.Tensor,
+        point_locations: torch.Tensor,
         multimask_output: bool,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -91,11 +116,17 @@ class MaskDecoder(nn.Module):
           torch.Tensor: batched predicted masks
           torch.Tensor: batched predictions of mask quality
         """
+        # Edit the image embeddings at the given point
+        if point_locations is not None:
+            print(point_locations)
+            # image_embeddings = self.edit_image_embeddings(image_embeddings, point_locations)
+
         masks, iou_pred = self.predict_masks(
             image_embeddings=image_embeddings,
             image_pe=image_pe,
             sparse_prompt_embeddings=sparse_prompt_embeddings,
             dense_prompt_embeddings=dense_prompt_embeddings,
+            point_locations= point_locations
         )
 
         # Select the correct mask or masks for output
@@ -115,8 +146,38 @@ class MaskDecoder(nn.Module):
         image_pe: torch.Tensor,
         sparse_prompt_embeddings: torch.Tensor,
         dense_prompt_embeddings: torch.Tensor,
+        point_locations: torch.Tensor,
+        delta: float = 1.3, 
     ) -> Tuple[torch.Tensor, torch.Tensor]:
+        
         """Predicts masks. See 'forward' for more details."""
+
+
+        # Convert point_locations to integer pixel indices
+        point_locations = torch.round(point_locations).int()
+    
+        # Clamp point_locations to be within the bounds of the image size
+        # Here's what each dimension represents: 
+        # 0 batch_size is the number of images processed in one batch.
+        # 1 num_channels is the number of feature channels in the embedding (e.g., the depth of the feature map).
+        # 2 height is the height of the feature map.
+        # 3 width is the width of the feature map.
+
+        point_locations[..., 0].clamp_(0, image_embeddings.shape[2] - 1)
+        point_locations[..., 1].clamp_(0, image_embeddings.shape[3] - 1)
+    
+        # Modify the embeddings around each point location
+        for b in range(point_locations.size(0)):
+            for i in range(point_locations.size(1)):
+                x, y = point_locations[b, i]
+                # Define the area to modify
+                lower_bound_x = max(0, x - 10)
+                upper_bound_x = min(image_embeddings.shape[2], x + 10)
+                lower_bound_y = max(0, y - 10)
+                upper_bound_y = min(image_embeddings.shape[3], y + 10)
+            
+        # Apply the modification, for example by adding a delta value
+        image_embeddings[b, :, lower_bound_x:upper_bound_x, lower_bound_y:upper_bound_y] *= delta    
         # Concatenate output tokens
         output_tokens = torch.cat([self.iou_token.weight, self.mask_tokens.weight], dim=0)
         output_tokens = output_tokens.unsqueeze(0).expand(sparse_prompt_embeddings.size(0), -1, -1)
